@@ -29,6 +29,7 @@ load_dotenv()
 
 from crew import AGENT_ORDER, OUTPUT_DIR, PRICE_CHECK_PATH, run  # noqa: E402
 from report_utils import check_report, markdown_to_pdf  # noqa: E402
+import budget  # noqa: E402
 import ui  # noqa: E402
 
 st.set_page_config(page_title="LaunchScout", page_icon="🔭", layout="wide")
@@ -69,8 +70,28 @@ with st.sidebar:
     hierarchical = st.toggle("Hierarchical process (manager agent)", value=False,
                              help="Stretch goal: a manager LLM delegates the work instead of a fixed order.")
 
+    # Monthly spending cap (budget.py): meter + what is left
+    bud = budget.status()
+    st.divider()
+    st.subheader("Monthly budget")
+    if bud["limit"]:
+        st.progress(min(bud["spent"] / bud["limit"], 1.0))
+        st.write(f"**${bud['spent']:.3f}** of **${bud['limit']:.2f}** used in {bud['month']}")
+        last = next((r for r in reversed(bud["runs"]) if r.get("completed")), None)
+        st.caption(f"About ${bud['run_estimate']:.2f} per run · "
+                   f"{bud['runs_left']} run(s) left this month"
+                   + (f" · last run ${last['cost_usd']:.3f}" if last else "")
+                   + ". Resets on the 1st (UTC).")
+    else:
+        st.caption(f"No cap set (MONTHLY_BUDGET_USD=0). Spent ${bud['spent']:.3f} in {bud['month']}.")
+
 # --------------------------------------------------------------------- form
 ui.hero()
+
+if not bud["can_start"]:
+    st.warning(f"**Monthly budget reached.** ${bud['spent']:.2f} of ${bud['limit']:.2f} has been used "
+               f"in {bud['month']}, and a run needs about ${bud['run_estimate']:.2f}. "
+               "New runs are paused until the budget resets on the 1st of next month (UTC).")
 
 with st.form("idea"):
     c1, c2 = st.columns(2)
@@ -78,7 +99,8 @@ with st.form("idea"):
     city = c2.text_input("City", "Coimbatore")
     target = c1.text_input("Target customer", "Office workers, age 25 to 40")
     known = c2.text_input("Known competitors (optional, comma separated)", "")
-    submitted = st.form_submit_button("Run research crew", type="primary")
+    submitted = st.form_submit_button("Run research crew", type="primary",
+                                      disabled=not bud["can_start"])
 
 
 def describe_step(step) -> str:
@@ -163,7 +185,10 @@ def run_crew_with_live_log(inputs: dict[str, str]) -> str | None:
     timer.caption(f"Finished in {int(time.time() - started)} s")
 
     if "error" in holder:
-        st.error(f"The crew stopped with an error: {holder['error']}")
+        if isinstance(holder["error"], budget.BudgetExceeded):
+            st.warning(str(holder["error"]))
+        else:
+            st.error(f"The crew stopped with an error: {holder['error']}")
         return None
     report = holder.get("report", "")  # crew.run already saved output/report.md
     # Keep a dated copy of every run (base for the "weekly re-run" stretch goal).

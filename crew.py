@@ -332,8 +332,22 @@ def _pick_report(final_answer: str, started_at: float) -> str:
 
 def run(inputs: dict[str, str], step_callback: Callable[[str, Any], None] | None = None,
         **kwargs: Any) -> str:
-    """Run the crew, save output/report.md and return the final report Markdown."""
+    """Run the crew, save output/report.md and return the final report Markdown.
+
+    Raises budget.BudgetExceeded before starting if this month's money left cannot
+    cover a typical run; a run that reaches the cap mid-way is stopped by budget's hook.
+    """
     import time
+
+    import budget
+
+    budget.install()
+    st_before = budget.status()
+    if not st_before["can_start"]:
+        raise budget.BudgetExceeded(
+            f"Monthly budget reached: ${st_before['spent']:.2f} of ${st_before['limit']:.2f} "
+            f"used in {st_before['month']} (a run needs about ${st_before['run_estimate']:.2f}).")
+    spent_before = st_before["spent"]
 
     inputs = {**inputs, "known_competitors": inputs.get("known_competitors") or "none given"}
     started_at = time.time()
@@ -344,12 +358,19 @@ def run(inputs: dict[str, str], step_callback: Callable[[str, Any], None] | None
         result = build_crew(step_callback=step_callback, evidence=evidence,
                             **kwargs).kickoff(inputs=inputs)
         final_answer = str(getattr(result, "raw", result))
-    except Exception:
+    except Exception as exc:
         # Some models save the report with the file tool and then return an empty
         # final message, which CrewAI raises on. Keep the saved report in that case.
         saved = REPORT_PATH.read_text(encoding="utf-8") if (
             REPORT_PATH.exists() and REPORT_PATH.stat().st_mtime >= started_at) else ""
         if "## sources" not in saved.lower():
+            over = budget.limit_usd() and budget.spent_now() >= budget.limit_usd()
+            budget.record_run(inputs["idea"], inputs["city"], budget.spent_now() - spent_before,
+                              completed=False, note="stopped: budget reached" if over else str(exc)[:120])
+            if over:
+                raise budget.BudgetExceeded(
+                    f"Stopped: the monthly budget of ${budget.limit_usd():.2f} was reached "
+                    "during this run.") from exc
             raise
         final_answer = ""
     finally:
@@ -357,6 +378,8 @@ def run(inputs: dict[str, str], step_callback: Callable[[str, Any], None] | None
 
         for event_type, handler in pairs:
             crewai_event_bus.off(event_type, handler)
+    budget.record_run(inputs["idea"], inputs["city"], budget.spent_now() - spent_before,
+                      completed=True)
     from report_utils import clean_report, verify_prices
 
     report = clean_report(_pick_report(final_answer, started_at))

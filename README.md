@@ -39,6 +39,23 @@ To show it works for any idea and city with no code change, the live app also pr
 | 5. 30-Day Launch Plan (Report Writer) | ![Launch plan](docs/screenshots/09_launch_plan.png) |
 | Sources: every price and claim links back to its page | ![Sources](docs/screenshots/10_sources.png) |
 
+## Monthly spending cap
+
+LaunchScout stops spending at **$0.30 per calendar month (UTC)** by default
+(`MONTHLY_BUDGET_USD` in `.env`; `0` turns the cap off). [`budget.py`](budget.py):
+
+- prices every LLM call from its real token usage (CrewAI `LLMCallCompletedEvent`) and every
+  Serper request, and adds it to `output/budget.json` the moment it happens;
+- only starts a run if the money left covers a typical run (1.2 x the most expensive run so far,
+  $0.08 until one has been measured), otherwise the Run button is disabled;
+- blocks further LLM calls with a CrewAI `before_llm_call` hook once the cap is reached, so a run in
+  progress stops instead of overspending (only the one call already in flight can finish).
+
+The sidebar shows what has been used this month, the cost per run and runs left. Prices for
+common models are built in; override them with `LLM_PRICE_INPUT_PER_M`, `LLM_PRICE_CACHED_PER_M`
+and `LLM_PRICE_OUTPUT_PER_M` if your provider charges differently. For a second safety net, also
+set a monthly budget on the OpenAI project that owns the key.
+
 ## Setup (Windows PowerShell)
 
 Use Python 3.10 to 3.13 (CrewAI's dependencies have no prebuilt wheels for 3.14 yet).
