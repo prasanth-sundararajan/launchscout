@@ -1,6 +1,6 @@
 # LaunchScout: Competitor Research Crew
 
-🌐 **Live app:** https://www.kowsalyagroups.com/techstack/launchscout/ (password protected)
+🌐 **Live app:** https://www.kowsalyagroups.com/techstack/launchscout/
 
 Four CrewAI agents research the market for a business idea and deliver a sourced
 competitor report with prices, customer complaints, the market gap, a recommended
@@ -48,7 +48,8 @@ Create the venv in a folder with a short path: Windows' 260-character path limit
   Markdown/PDF download, automatic quality checklist
 - `report_utils.py`: Markdown to PDF, checklist checks (6 sections, at least 3 competitors,
   price and source on every row, source links)
-- `output/report.md`: latest report; `output/runs/`: dated copy of every run
+- `output/report.md`: latest report; `output/report_task_output.md`: the writer task's raw `output_file`;
+  `output/price_check.json`: which prices were found in pages read; `output/runs/`: dated copy of every run
 
 ## Done checklist mapping
 
@@ -80,7 +81,7 @@ cd /opt/launchscout && nano .env          # same keys as .env.example
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
-In ReviewLens' `Caddyfile`, a route for `/techstack/launchscout/*` (with `basic_auth`)
+In ReviewLens' `Caddyfile`, a route for `/techstack/launchscout/*`
 sits before the ReviewLens route and proxies to `launchscout:8501`; reload Caddy after
 editing it. Update later with:
 

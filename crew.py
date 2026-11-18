@@ -253,6 +253,10 @@ def build_crew(
         agent=writer,
         context=[research_task, review_task, strategy_task],
         guardrail=price_guardrail(can_search=False, evidence=evidence),
+        # CrewAI saves the writer's raw final answer here. It is kept apart from
+        # report.md because some models answer only "report saved" after using the
+        # file tool; run() picks the real report and writes report.md.
+        output_file=str(OUTPUT_DIR / "report_task_output.md"),
         guardrail_max_retries=3,
     )
 
