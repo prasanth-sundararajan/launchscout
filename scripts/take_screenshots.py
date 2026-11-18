@@ -68,11 +68,11 @@ def main() -> None:
         page.get_by_text("Live progress").wait_for(timeout=60_000)
         page.get_by_text("search").first.wait_for(timeout=120_000)
         page.wait_for_timeout(25_000)
-        to_top(page, "h2:has-text('Live progress')")
+        to_top(page, ":is(h1,h2,h3):has-text('Live progress')")
         shot(page, "02_live_progress_researcher")
         page.get_by_text("Review Analyst —").first.wait_for(timeout=args.timeout_min * 60_000)
         page.wait_for_timeout(20_000)
-        to_top(page, "h2:has-text('Live progress')")
+        to_top(page, ":is(h1,h2,h3):has-text('Live progress')")
         shot(page, "03_live_progress_review_analyst")
 
         # Wait for the finished report
@@ -87,28 +87,38 @@ def main() -> None:
         shot(page, "04_agent_handover")
         handover.click()
 
-        # 5. Report header: downloads + quality checklist
-        to_top(page, "h3:has-text('Report'), h2:has-text('Report')")
-        shot(page, "05_report_downloads_and_checklist")
+        # From here on a failed step is reported and skipped, so one bad selector
+        # does not throw away the whole (paid) run.
+        def step(name, fn):
+            try:
+                fn()
+            except Exception as exc:  # noqa: BLE001
+                print(f"SKIPPED {name}: {str(exc).splitlines()[0]}", flush=True)
 
-        # 6-10. The six report sections
+        # 5. Report header: download buttons + quality checklist
+        step("05", lambda: (to_top(page, "[data-testid='stDownloadButton']", offset=120),
+                            shot(page, "05_report_downloads_and_checklist")))
+
+        # 6-10. The six report sections (h2 headings inside the rendered report)
         sections = [
-            ("06_key_competitors", "1. Key Competitors"),
-            ("07_customer_complaints", "2. What Customers Complain About"),
-            ("08_market_gap_and_positioning", "3. Market Gap"),
-            ("09_launch_plan", "5. 30-Day Launch Plan"),
+            ("06_key_competitors", "Key Competitors"),
+            ("07_customer_complaints", "What Customers Complain About"),
+            ("08_market_gap_and_positioning", "Market Gap"),
+            ("09_launch_plan", "30-Day Launch Plan"),
             ("10_sources", "Sources"),
         ]
         for name, heading in sections:
-            to_top(page, f"h2:has-text('{heading}')")
-            shot(page, name)
+            step(name, lambda n=name, h=heading: (
+                to_top(page, f"h2:has-text('{h}') >> nth=-1"), shot(page, n)))
 
         # Downloads: Markdown and PDF
         for label, fname in (("Markdown", "report.md"), ("PDF", "report.pdf")):
-            with page.expect_download() as dl:
-                page.get_by_role("button", name=label).click()
-            dl.value.save_as(str(SAMPLE / fname))
-            print("downloaded", fname, flush=True)
+            def dl_one(label=label, fname=fname):
+                with page.expect_download() as dl:
+                    page.get_by_role("button", name=label).click()
+                dl.value.save_as(str(SAMPLE / fname))
+                print("downloaded", fname, flush=True)
+            step(fname, dl_one)
 
         browser.close()
 

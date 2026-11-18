@@ -16,6 +16,29 @@ positioning and a 30-day launch plan.
 Tasks run with `Process.sequential`; each task gets the earlier tasks as `context`.
 A sidebar toggle switches to `Process.hierarchical` with a manager LLM (stretch goal).
 
+## Screenshots: each output requirement
+
+Captured from the live app with the sample input (healthy millet meal boxes, Coimbatore,
+office workers 25 to 40) by [`scripts/take_screenshots.py`](scripts/take_screenshots.py).
+The report from that run is in [`docs/sample/report.md`](docs/sample/report.md) and
+[`docs/sample/report.pdf`](docs/sample/report.pdf).
+To show it works for any idea and city with no code change, the live app also produced
+[`docs/sample/bengaluru-pet-grooming-report.md`](docs/sample/bengaluru-pet-grooming-report.md)
+(at-home pet grooming, Bengaluru: 5 competitors, all prices verified, 9 Google Maps reviews cited).
+
+| Requirement | Screenshot |
+|---|---|
+| Input form: business idea, city, target customer, optional known competitors | ![Input form](docs/screenshots/01_input_form.png) |
+| Live progress: which agent is working and what it found (Market Researcher searching and reading pages) | ![Live progress, researcher](docs/screenshots/02_live_progress_researcher.png) |
+| Live progress: next agent working after the hand-off (Review Analyst) | ![Live progress, review analyst](docs/screenshots/03_live_progress_review_analyst.png) |
+| Sequential tasks: each agent hands its output to the next as context | ![Agent hand-over](docs/screenshots/04_agent_handover.png) |
+| Final report shown in the app, Markdown/PDF download, quality checklist | ![Report, downloads and checklist](docs/screenshots/05_report_downloads_and_checklist.png) |
+| 1. Key Competitors: price, channel, strength, weakness, with sources (Market Researcher) | ![Key competitors](docs/screenshots/06_key_competitors.png) |
+| 2. What Customers Complain About, with sources (Review Analyst) | ![Customer complaints](docs/screenshots/07_customer_complaints.png) |
+| 3. Market Gap and 4. Recommended Positioning (Strategy Analyst) | ![Market gap and positioning](docs/screenshots/08_market_gap_and_positioning.png) |
+| 5. 30-Day Launch Plan (Report Writer) | ![Launch plan](docs/screenshots/09_launch_plan.png) |
+| Sources: every price and claim links back to its page | ![Sources](docs/screenshots/10_sources.png) |
+
 ## Setup (Windows PowerShell)
 
 Use Python 3.10 to 3.13 (CrewAI's dependencies have no prebuilt wheels for 3.14 yet).
