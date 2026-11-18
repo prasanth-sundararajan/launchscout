@@ -29,8 +29,10 @@ load_dotenv()
 
 from crew import AGENT_ORDER, OUTPUT_DIR, PRICE_CHECK_PATH, run  # noqa: E402
 from report_utils import check_report, markdown_to_pdf  # noqa: E402
+import ui  # noqa: E402
 
 st.set_page_config(page_title="LaunchScout", page_icon="🔭", layout="wide")
+ui.inject_styles()
 
 AGENT_ICONS = {
     "Market Researcher": "🔎",
@@ -68,8 +70,7 @@ with st.sidebar:
                              help="Stretch goal: a manager LLM delegates the work instead of a fixed order.")
 
 # --------------------------------------------------------------------- form
-st.title("🔭 LaunchScout")
-st.write("A crew of four AI agents researches your market and writes a competitor report with prices, gaps and a launch plan.")
+ui.hero()
 
 with st.form("idea"):
     c1, c2 = st.columns(2)
@@ -131,9 +132,8 @@ def run_crew_with_live_log(inputs: dict[str, str]) -> str | None:
 
     def draw_cards():
         for card, agent in zip(cards, AGENT_ORDER):
-            s = state[agent]
-            badge = {"waiting": "⏳ waiting", "working": "⚙️ working…", "done": "✅ done"}[s]
-            card.markdown(f"### {AGENT_ICONS[agent]}\n**{agent}**\n\n{badge}")
+            card.markdown(ui.agent_card(AGENT_ICONS[agent], agent, state[agent]),
+                          unsafe_allow_html=True)
 
     draw_cards()
     done = False

@@ -4,5 +4,20 @@ maxUploadSize = 10
 [browser]
 gatherUsageStats = false
 
+# LaunchScout design system: deep navy surfaces, light-blue accent.
+# Extra component styling lives in ui.py (same tokens).
 [theme]
-primaryColor = "#1b3a5c"
+base = "dark"
+primaryColor = "#38BDF8"              # light blue: buttons, focus, toggles
+backgroundColor = "#071426"           # navy-950: page
+secondaryBackgroundColor = "#0F2747"  # navy-850: inputs, code, expanders
+textColor = "#E6F0FF"
+linkColor = "#7DD3FC"
+borderColor = "#1E3A66"
+showWidgetBorder = true
+baseRadius = "0.65rem"
+font = "sans-serif"
+
+[theme.sidebar]
+backgroundColor = "#0B1F3A"           # navy-900
+secondaryBackgroundColor = "#12305A"
