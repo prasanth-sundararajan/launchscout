@@ -29,7 +29,7 @@ load_dotenv()
 
 from crew import AGENT_ORDER, OUTPUT_DIR, PRICE_CHECK_PATH, run  # noqa: E402
 from report_utils import check_report, markdown_to_pdf  # noqa: E402
-import budget  # noqa: E402
+import run_limit  # noqa: E402
 import ui  # noqa: E402
 
 st.set_page_config(page_title="LaunchScout", page_icon="🔭", layout="wide")
@@ -70,28 +70,23 @@ with st.sidebar:
     hierarchical = st.toggle("Hierarchical process (manager agent)", value=False,
                              help="Stretch goal: a manager LLM delegates the work instead of a fixed order.")
 
-    # Monthly spending cap (budget.py): meter + what is left
-    bud = budget.status()
+    # Daily run limit (run_limit.py): runs used today + what is left
+    bud = run_limit.status()
     st.divider()
-    st.subheader("Monthly budget")
+    st.subheader("Daily runs")
     if bud["limit"]:
-        st.progress(min(bud["spent"] / bud["limit"], 1.0))
-        st.write(f"**${bud['spent']:.3f}** of **${bud['limit']:.2f}** used in {bud['month']}")
-        last = next((r for r in reversed(bud["runs"]) if r.get("completed")), None)
-        st.caption(f"About ${bud['run_estimate']:.2f} per run · "
-                   f"{bud['runs_left']} run(s) left this month"
-                   + (f" · last run ${last['cost_usd']:.3f}" if last else "")
-                   + ". Resets on the 1st (UTC).")
+        st.progress(min(bud["used"] / bud["limit"], 1.0))
+        st.write(f"**{bud['used']}** of **{bud['limit']}** runs used today")
+        st.caption(f"{bud['runs_left']} run(s) left today. Resets at midnight (India time).")
     else:
-        st.caption(f"No cap set (MONTHLY_BUDGET_USD=0). Spent ${bud['spent']:.3f} in {bud['month']}.")
+        st.caption(f"No daily limit (MAX_RUNS_PER_DAY=0). {bud['used']} run(s) today.")
 
 # --------------------------------------------------------------------- form
 ui.hero()
 
 if not bud["can_start"]:
-    st.warning(f"**Monthly budget reached.** ${bud['spent']:.2f} of ${bud['limit']:.2f} has been used "
-               f"in {bud['month']}, and a run needs about ${bud['run_estimate']:.2f}. "
-               "New runs are paused until the budget resets on the 1st of next month (UTC).")
+    st.warning(f"**Daily limit reached.** All {bud['limit']} runs for today have been used. "
+               "New runs open again at midnight (India time).")
 
 with st.form("idea"):
     c1, c2 = st.columns(2)
@@ -185,7 +180,7 @@ def run_crew_with_live_log(inputs: dict[str, str]) -> str | None:
     timer.caption(f"Finished in {int(time.time() - started)} s")
 
     if "error" in holder:
-        if isinstance(holder["error"], budget.BudgetExceeded):
+        if isinstance(holder["error"], run_limit.RunLimitReached):
             st.warning(str(holder["error"]))
         else:
             st.error(f"The crew stopped with an error: {holder['error']}")
