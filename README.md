@@ -104,9 +104,18 @@ cd /opt/launchscout && nano .env          # same keys as .env.example
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
-In ReviewLens' `Caddyfile`, a route for `/techstack/launchscout/*`
-sits before the ReviewLens route and proxies to `launchscout:8501`; reload Caddy after
-editing it. Update later with:
+ReviewLens' Caddyfile imports route files from `/opt/reviewlens/sites.d/`. Install
+LaunchScout's route from [`deploy/launchscout.caddy`](deploy/launchscout.caddy) and reload Caddy:
+
+```bash
+cp /opt/launchscout/deploy/launchscout.caddy /opt/reviewlens/sites.d/
+docker exec reviewlens-caddy-1 caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+```
+
+On this server ReviewLens itself is at `/techstack/ReviewLens/` (`APP_PATH=techstack/ReviewLens`
+in ReviewLens' `.env`).
+
+Update later with:
 
 ```bash
 cd /opt/launchscout && git pull && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build

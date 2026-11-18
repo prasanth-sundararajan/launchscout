@@ -1,0 +1,7 @@
+# LaunchScout route, imported into ReviewLens' Caddy site block on the shared VPS.
+# Copy to /opt/reviewlens/sites.d/ and reload Caddy (see README "Deploy on the Hostinger VPS").
+redir /techstack/launchscout /techstack/launchscout/ 308
+@launchscout path /techstack/launchscout/*
+handle @launchscout {
+	reverse_proxy launchscout:8501
+}
