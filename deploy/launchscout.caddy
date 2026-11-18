@@ -3,5 +3,9 @@
 redir /techstack/launchscout /techstack/launchscout/ 308
 @launchscout path /techstack/launchscout/*
 handle @launchscout {
+	# Caddy matches paths case-insensitively but Streamlit does not: send other
+	# spellings (e.g. /techstack/LaunchScout/) to the exact path.
+	@launchscout_other_case not path_regexp ^/techstack/launchscout/
+	redir @launchscout_other_case /techstack/launchscout/ 302
 	reverse_proxy launchscout:8501
 }
