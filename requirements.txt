@@ -1,0 +1,8 @@
+crewai[tools,anthropic]==1.15.41
+streamlit>=1.40
+python-dotenv
+markdown
+xhtml2pdf
+requests
+beautifulsoup4
+ddgs

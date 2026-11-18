@@ -1,0 +1,20 @@
+# Production on the VPS that already runs ReviewLens behind Caddy.
+# The app is served at https://<APP_DOMAIN>/<APP_PATH>/ (default techstack/launchscout),
+# reached only through ReviewLens' Caddy over the shared Docker network.
+# Usage on the server:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+services:
+  launchscout:
+    ports: !reset []
+    expose:
+      - "8501"
+    environment:
+      - STREAMLIT_SERVER_BASE_URL_PATH=${APP_PATH:-techstack/launchscout}
+    networks:
+      - default
+      - proxy
+
+networks:
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK:-reviewlens_default}

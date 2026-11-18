@@ -1,0 +1,17 @@
+# Local run:  docker compose up -d --build   ->  http://localhost:8510
+# Secrets come from .env on the host (see .env.example), never from this file.
+services:
+  launchscout:
+    build: .
+    image: launchscout:latest
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "8510:8501"
+    volumes:
+      - output:/app/output
+
+volumes:
+  output:
