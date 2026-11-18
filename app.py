@@ -40,14 +40,23 @@ AGENT_ICONS = {
 }
 
 # ------------------------------------------------------------------ sidebar
+# On a public server set LOCK_SETTINGS=true: visitors then cannot change the model or
+# type keys (os.environ is shared by every visitor of the app).
+LOCKED = os.getenv("LOCK_SETTINGS", "").lower() in ("1", "true", "yes")
+
 with st.sidebar:
     st.header("Settings")
-    st.caption("Keys are read from `.env`; you can also paste them here for this run only.")
-    model = st.text_input("Model (LLM_MODEL)", os.getenv("LLM_MODEL") or "anthropic/claude-opus-5-5")
+    default_model = os.getenv("LLM_MODEL") or "anthropic/claude-opus-5-5"
+    if LOCKED:
+        model = default_model
+        st.caption(f"Model: `{model}` (set by the server)")
+    else:
+        st.caption("Keys are read from `.env`; you can also paste them here for this run only.")
+        model = st.text_input("Model (LLM_MODEL)", default_model)
     provider_key = {"openai": "OPENAI_API_KEY", "gemini": "GEMINI_API_KEY"}.get(
         model.split("/")[0], "ANTHROPIC_API_KEY")
     for var in (provider_key, "SERPER_API_KEY"):
-        if not os.getenv(var, "").strip():
+        if not LOCKED and not os.getenv(var, "").strip():
             val = st.text_input(var + (" (optional)" if var == "SERPER_API_KEY" else ""), type="password")
             if val:
                 os.environ[var] = val
