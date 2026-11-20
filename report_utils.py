@@ -123,7 +123,7 @@ def competitor_table(section: str) -> dict[str, list[str]]:
 
 
 def price_guardrail(max_rejections: int = 2, can_search: bool = True,
-                    evidence: list[str] | None = None):
+                    evidence: list[str] | None = None, check_sources: bool = False):
     """CrewAI task guardrail: send a competitor table back while it has guessed prices,
     prices that do not appear in any page the agents read (`evidence`), or fewer than
     3 competitors with a found price.
@@ -162,6 +162,11 @@ def price_guardrail(max_rejections: int = 2, can_search: bool = True,
             problems.append(
                 f"Only {len(t['complete'])} competitors have both a found price and a source; "
                 "at least 3 are required.")
+        if check_sources:  # output guardrail: claims in the final report need sources
+            from guardrails import missing_sources
+
+            problems += [f"Fix: {p}; every price and claim needs a [n] number that matches "
+                         "a full https:// URL in '## Sources'." for p in missing_sources(text)]
         if not problems or state["rejections"] >= max_rejections:
             return True, output
         state["rejections"] += 1

@@ -6,6 +6,7 @@ Run:  streamlit run app.py
 from __future__ import annotations
 
 import json
+import logging
 import os
 import queue
 import re
@@ -27,12 +28,32 @@ for stream in (sys.stdout, sys.stderr):
 
 load_dotenv()
 
+import guardrails  # noqa: E402
 from crew import AGENT_ORDER, OUTPUT_DIR, PRICE_CHECK_PATH, run  # noqa: E402
 from report_utils import check_report, markdown_to_pdf  # noqa: E402
 import run_limit  # noqa: E402
 import ui  # noqa: E402
 
+logging.basicConfig(level=logging.INFO)
 st.set_page_config(page_title="LaunchScout", page_icon="🔭", layout="wide")
+
+
+@st.cache_resource
+def _rate_limiter() -> guardrails.RateLimiter:
+    """One limiter for the whole server process (shared by every visitor)."""
+    return guardrails.RateLimiter()
+
+
+def _client_key() -> str:
+    """Client IP from the proxy header, else this browser session's id."""
+    try:
+        fwd = st.context.headers.get("X-Forwarded-For", "") or st.context.headers.get("X-Real-Ip", "")
+        if fwd:
+            return "ip:" + fwd.split(",")[0].strip()
+    except Exception:
+        pass
+    sid = st.session_state.setdefault("_sid", os.urandom(8).hex())
+    return "session:" + sid
 ui.inject_styles()
 
 AGENT_ICONS = {
@@ -90,15 +111,23 @@ if not bud["can_start"]:
 
 with st.form("idea"):
     c1, c2 = st.columns(2)
-    idea = c1.text_input("Business idea", "Healthy millet meal boxes delivered for lunch")
-    city = c2.text_input("City", "Coimbatore")
-    target = c1.text_input("Target customer", "Office workers, age 25 to 40")
-    known = c2.text_input("Known competitors (optional, comma separated)", "")
+    idea = c1.text_input("Business idea", "Healthy millet meal boxes delivered for lunch",
+                         max_chars=guardrails.MAX_IDEA_CHARS)
+    city = c2.text_input("City", "Coimbatore", max_chars=guardrails.MAX_CITY_CHARS)
+    target = c1.text_input("Target customer", "Office workers, age 25 to 40",
+                           max_chars=guardrails.MAX_TARGET_CHARS)
+    known = c2.text_input("Known competitors (optional, comma separated)", "",
+                          max_chars=guardrails.MAX_KNOWN_CHARS)
     submitted = st.form_submit_button("Run research crew", type="primary",
                                       disabled=not bud["can_start"])
 
 
 def describe_step(step) -> str:
+    """One log line for a step, with secrets redacted and raw HTML escaped."""
+    return guardrails.sanitize_output(_describe_step(step))
+
+
+def _describe_step(step) -> str:
     """Turn a CrewAI step object (AgentAction / AgentFinish / ToolResult) into one log line."""
     if isinstance(step, str):  # already formatted (tool events from crew.run)
         return step
@@ -120,17 +149,20 @@ def describe_step(step) -> str:
 def run_crew_with_live_log(inputs: dict[str, str]) -> str | None:
     events: queue.Queue = queue.Queue()
     holder: dict = {}
+    budget = guardrails.RunBudget()  # pages / searches / deadline for this run
 
     def on_step(role, step):
         events.put(("step", role, describe_step(step)))
 
     def on_task(output):
-        events.put(("task", getattr(output, "agent", "?"), str(getattr(output, "raw", ""))))
+        events.put(("task", getattr(output, "agent", "?"),
+                    guardrails.sanitize_output(str(getattr(output, "raw", "")))))
 
     def worker():
         try:
             holder["report"] = run(inputs, step_callback=on_step,
-                                   task_callback=on_task, hierarchical=hierarchical)
+                                   task_callback=on_task, hierarchical=hierarchical,
+                                   budget=budget)
         except Exception as exc:  # surfaced in the UI below
             holder["error"] = exc
         finally:
@@ -158,7 +190,15 @@ def run_crew_with_live_log(inputs: dict[str, str]) -> str | None:
         try:
             kind, role, payload = events.get(timeout=0.5)
         except queue.Empty:
-            timer.caption(f"Running for {int(time.time() - started)} s")
+            elapsed = int(time.time() - started)
+            timer.caption(f"Running for {elapsed} s")
+            # Overall run timeout: tools refuse further calls once the budget expires;
+            # after a grace period stop waiting for the crew altogether.
+            if guardrails.RUN_TIMEOUT_SECONDS and elapsed > guardrails.RUN_TIMEOUT_SECONDS + 120:
+                budget.cancelled = True
+                st.warning(f"The research hit the {guardrails.RUN_TIMEOUT_SECONDS // 60}-minute "
+                           "time limit and was stopped. Please try again with a narrower idea.")
+                return None
             continue
         if kind == "end":
             done = True
@@ -180,10 +220,10 @@ def run_crew_with_live_log(inputs: dict[str, str]) -> str | None:
     timer.caption(f"Finished in {int(time.time() - started)} s")
 
     if "error" in holder:
-        if isinstance(holder["error"], run_limit.RunLimitReached):
-            st.warning(str(holder["error"]))
-        else:
-            st.error(f"The crew stopped with an error: {holder['error']}")
+        if isinstance(holder["error"], (run_limit.RunLimitReached, ValueError)):
+            st.warning(str(holder["error"]))  # our own friendly messages
+        else:  # no stack trace or secrets in the UI; details go to the server log
+            st.error(guardrails.friendly_error(holder["error"]))
         return None
     report = holder.get("report", "")  # crew.run already saved output/report.md
     # Keep a dated copy of every run (base for the "weekly re-run" stretch goal).
@@ -199,16 +239,18 @@ def run_crew_with_live_log(inputs: dict[str, str]) -> str | None:
 
 if submitted:
     missing = [] if os.getenv(provider_key, "").strip() else [provider_key]
-    if not idea.strip() or not city.strip() or not target.strip():
-        st.warning("Please fill in the business idea, city and target customer.")
+    inputs, problem = guardrails.validate_inputs(
+        {"idea": idea, "city": city, "target_customer": target, "known_competitors": known})
+    limiter, client = _rate_limiter(), _client_key()
+    if problem:
+        st.warning(problem)
     elif missing:
         st.warning("Missing API key(s): " + ", ".join(missing))
+    elif not limiter.hit(client):
+        st.warning(guardrails.rate_limit_message(limiter.retry_after(client), limiter.limit))
     else:
         st.subheader("Live progress")
-        report = run_crew_with_live_log(
-            {"idea": idea.strip(), "city": city.strip(),
-             "target_customer": target.strip(), "known_competitors": known.strip()}
-        )
+        report = run_crew_with_live_log(inputs)
         if report:
             st.session_state["report"] = report
             try:
@@ -228,7 +270,8 @@ if report:
         d2.download_button("⬇️ PDF", markdown_to_pdf(report), file_name="report.pdf",
                            mime="application/pdf")
     except Exception as exc:
-        d2.caption(f"PDF unavailable: {exc}")
+        logging.getLogger("launchscout").warning("PDF export failed: %s", exc)
+        d2.caption("PDF unavailable for this report.")
 
     with st.expander("Quality checklist", expanded=True):
         for name, ok, detail in check_report(report):

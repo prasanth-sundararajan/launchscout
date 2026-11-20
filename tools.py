@@ -2,10 +2,8 @@
 
 - Search: SerperDevTool (Google via serper.dev) when SERPER_API_KEY is set,
   otherwise a free DuckDuckGo search so the crew still runs without that key.
-- Scrape / write: the official crewai_tools ScrapeWebsiteTool and FileWriterTool
-  when they import. On some Windows machines Application Control blocks a native
-  DLL crewai_tools pulls in (grpc via chromadb); then small drop-in versions with
-  the same names are used.
+- Scrape / write: own small tools with guardrails (see guardrails.py): the scraper
+  only reads public http(s) pages, the writer only writes inside output/.
 """
 
 from __future__ import annotations
@@ -13,11 +11,14 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 import requests
 from bs4 import BeautifulSoup
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
+
+import guardrails
 
 _UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/130.0 Safari/537.36"}
@@ -155,51 +156,90 @@ def make_search_tool() -> BaseTool:
     return DuckDuckGoSearchTool()
 
 
-try:
-    from crewai_tools import FileWriterTool, ScrapeWebsiteTool  # noqa: F401
+class _ScrapeInput(BaseModel):
+    website_url: str = Field(..., description="Full URL of the page to read")
 
-    USING = "crewai_tools"
-except Exception:  # ImportError or a blocked DLL
-    USING = "built-in fallback"
 
-    class _ScrapeInput(BaseModel):
-        website_url: str = Field(..., description="Full URL of the page to read")
+class ScrapeWebsiteTool(BaseTool):
+    """Reads one public web page. Guardrails: http(s) on public hosts only (SSRF blocker,
+    re-checked on every redirect), timeout, max download size, max pages per run, text
+    truncated per page and wrapped as untrusted data."""
 
-    class ScrapeWebsiteTool(BaseTool):
-        name: str = "Read website content"
-        description: str = "Reads the visible text of a web page. Input: website_url."
-        args_schema: type[BaseModel] = _ScrapeInput
-        max_chars: int = 8000
+    name: str = "Read website content"
+    description: str = "Reads the visible text of a public web page. Input: website_url."
+    args_schema: type[BaseModel] = _ScrapeInput
+    max_chars: int = guardrails.MAX_SCRAPE_CHARS
+    budget: Any = None  # guardrails.RunBudget shared by the run's tools
 
-        def _run(self, website_url: str) -> str:
-            try:
-                r = requests.get(website_url, headers=_UA, timeout=30)
-                r.raise_for_status()
-            except Exception as exc:
-                return f"Could not open {website_url}: {exc}"
-            soup = BeautifulSoup(r.text, "html.parser")
-            for tag in soup(["script", "style", "noscript", "svg"]):
-                tag.decompose()
-            text = " ".join(soup.get_text(" ").split())
-            return text[: self.max_chars] or "Page had no readable text."
+    def _run(self, website_url: str) -> str:
+        try:
+            guardrails.check_url(website_url)
+        except guardrails.BlockedURL as exc:
+            return f"Blocked URL {website_url[:200]}: {exc}. Only public http(s) pages can be read."
+        if self.budget is not None and (msg := self.budget.take("page")):
+            return msg
+        try:
+            final_url, html = guardrails.safe_fetch_text(website_url, headers=_UA)
+        except guardrails.BlockedURL as exc:
+            return f"Blocked URL {website_url[:200]}: {exc}."
+        except Exception as exc:
+            return f"Could not open {website_url[:200]}: {type(exc).__name__}"
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in soup(["script", "style", "noscript", "svg"]):
+            tag.decompose()
+        text = " ".join(soup.get_text(" ").split()) or "Page had no readable text."
+        return guardrails.wrap_untrusted(text, final_url, self.max_chars)
 
-    class _WriteInput(BaseModel):
-        filename: str = Field(..., description="File name, e.g. report.md")
-        content: str = Field(..., description="Full text to write")
-        directory: str | None = Field(None, description="Folder to write into")
-        overwrite: bool | str = Field(True, description="Overwrite an existing file")
 
-    class FileWriterTool(BaseTool):
-        name: str = "File Writer Tool"
-        description: str = "Writes text content to a file. Inputs: filename, content, directory, overwrite."
-        args_schema: type[BaseModel] = _WriteInput
+class GuardedTool(BaseTool):
+    """Wraps a search/review tool: counts calls against the run budget and marks the
+    output as untrusted data."""
 
-        def _run(self, filename: str, content: str, directory: str | None = None,
-                 overwrite: bool | str = True) -> str:
-            folder = Path(directory or ".")
-            folder.mkdir(parents=True, exist_ok=True)
-            path = folder / Path(filename).name
-            if path.exists() and str(overwrite).lower() not in ("true", "1", "yes"):
-                return f"{path} exists and overwrite is false."
-            path.write_text(content, encoding="utf-8")
-            return f"Content successfully written to {path}"
+    inner: Any
+    budget: Any = None
+    kind: str = "search"
+
+    def _run(self, **kwargs: Any) -> str:
+        if self.budget is not None and (msg := self.budget.take(self.kind)):
+            return msg
+        try:
+            out = self.inner._run(**kwargs)
+        except Exception as exc:
+            return f"{self.inner.name} failed: {type(exc).__name__}. Try a different query."
+        return guardrails.wrap_untrusted(str(out), self.inner.name, guardrails.MAX_SCRAPE_CHARS)
+
+
+def guard(tool: BaseTool, budget: Any, kind: str = "search") -> BaseTool:
+    return GuardedTool(name=tool.name, description=tool.description,
+                       args_schema=tool.args_schema, inner=tool, budget=budget, kind=kind)
+
+
+OUTPUT_DIR = Path(__file__).parent / "output"
+
+
+class _WriteInput(BaseModel):
+    filename: str = Field(..., description="File name, e.g. report.md")
+    content: str = Field(..., description="Full text to write")
+    directory: str | None = Field(None, description="Folder to write into")
+    overwrite: bool | str = Field(True, description="Overwrite an existing file")
+
+
+class FileWriterTool(BaseTool):
+    """Writes a file, but only inside output/ (a .md/.txt name; any directory outside
+    output/ is ignored), so injected instructions cannot write elsewhere."""
+
+    name: str = "File Writer Tool"
+    description: str = "Writes text content to a file in the output folder. Inputs: filename, content."
+    args_schema: type[BaseModel] = _WriteInput
+
+    def _run(self, filename: str, content: str, directory: str | None = None,
+             overwrite: bool | str = True) -> str:
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        name = Path(str(filename)).name
+        if not name.lower().endswith((".md", ".txt")):
+            return "Only .md or .txt files can be written."
+        path = OUTPUT_DIR / name
+        if path.exists() and str(overwrite).lower() not in ("true", "1", "yes"):
+            return f"{name} exists and overwrite is false."
+        path.write_text(str(content)[:200_000], encoding="utf-8")
+        return f"Content successfully written to {path}"

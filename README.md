@@ -39,6 +39,24 @@ To show it works for any idea and city with no code change, the live app also pr
 | 5. 30-Day Launch Plan (Report Writer) | ![Launch plan](docs/screenshots/09_launch_plan.png) |
 | Sources: every price and claim links back to its page | ![Sources](docs/screenshots/10_sources.png) |
 
+## Guardrails
+
+All checks live in [`guardrails.py`](guardrails.py) (pure Python, tested in
+[`tests/test_guardrails.py`](tests/test_guardrails.py): `pip install pytest && pytest -q`).
+
+| Layer | What it does | Limit (env var, default) |
+|---|---|---|
+| Input | Required fields, length caps, control and zero-width chars stripped | idea 200, city 60, target 150, competitors 300 chars |
+| Input | Clearly harmful/illegal ideas (drugs, weapons, counterfeit, fraud, malware...) and off-topic requests (poems, trivia, code) get a friendly refusal | |
+| Prompt injection | Injection patterns in the form ("ignore previous instructions", "reveal your prompt", fake `<system>` tags) are refused | |
+| Prompt injection | Every search result, scraped page and review is wrapped in `<untrusted_data>` tags (a page cannot close the wrapper), flagged when it contains instruction-like text, and every agent is told to treat it as data only | page text `MAX_SCRAPE_CHARS`=6000 |
+| Tools (SSRF) | The scraper reads only `http(s)` on ports 80/443/8080/8443 and public hosts: localhost, `127/8`, `10/8`, `172.16/12`, `192.168/16`, `169.254/16` (cloud metadata), `100.64/10`, `::1`, `fc00::/7`, `fe80::/10`, `*.local`/`*.internal` and URLs with credentials are blocked; the hostname is resolved and checked, and every redirect hop is re-checked | `FETCH_TIMEOUT_SECONDS`=15, `MAX_RESPONSE_BYTES`=2 MB, 3 redirects |
+| Tools | The file writer only writes `.md`/`.txt` inside `output/` | |
+| Cost | Pages read and searches (incl. Google Maps reviews) per run | `MAX_PAGES_PER_RUN`=20, `MAX_SEARCHES_PER_RUN`=30 |
+| Cost | Agent iterations, tokens per LLM call (hard cap 16000), overall run time | `AGENT_MAX_ITER`=15, `LLM_MAX_TOKENS`, `RUN_TIMEOUT_SECONDS`=900 |
+| Abuse | Runs per visitor (client IP, else browser session) per hour, plus the global daily cap below | `RUNS_PER_SESSION_PER_HOUR`=2, `MAX_RUNS_PER_DAY`=3 |
+| Output | The writer's task guardrail sends the report back when competitor rows lack a `[n]` source or Sources has no URLs; raw HTML is escaped; API keys are redacted from the report and live log; errors show a friendly message (details only in the server log, no stack traces) | |
+
 ## Daily run limit
 
 LaunchScout allows **3 crew runs per day** by default (`MAX_RUNS_PER_DAY` in `.env`; `0` turns the
@@ -78,6 +96,7 @@ Create the venv in a folder with a short path: Windows' 260-character path limit
 - `tools.py`: uses `crewai_tools` (SerperDevTool, ScrapeWebsiteTool, FileWriterTool); if that
   package cannot load (for example Windows Application Control blocking grpc's DLL), small
   drop-in versions with the same names are used
+- `guardrails.py`: input, prompt-injection, SSRF, cost and output guardrails (see Guardrails)
 - `app.py`: Streamlit form, live per-agent status and step log, report view,
   Markdown/PDF download, automatic quality checklist
 - `report_utils.py`: Markdown to PDF, checklist checks (6 sections, at least 3 competitors,

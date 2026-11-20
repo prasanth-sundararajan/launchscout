@@ -12,9 +12,10 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 
+import guardrails
 from crewai import LLM, Agent, Crew, Process, Task
 from report_utils import price_guardrail
-from tools import FileWriterTool, ScrapeWebsiteTool, make_review_tools, make_search_tool
+from tools import FileWriterTool, ScrapeWebsiteTool, guard, make_review_tools, make_search_tool
 
 OUTPUT_DIR = Path(__file__).parent / "output"
 REPORT_PATH = OUTPUT_DIR / "report.md"
@@ -31,7 +32,7 @@ def make_llm() -> LLM:
     thinking tokens count against it and the final report is long.
     """
     model = os.getenv("LLM_MODEL") or "anthropic/claude-opus-5-5"
-    return LLM(model=model, max_tokens=int(os.getenv("LLM_MAX_TOKENS") or "16000"))
+    return LLM(model=model, max_tokens=guardrails.llm_max_tokens())  # capped at 16000
 
 
 def build_crew(
@@ -39,6 +40,7 @@ def build_crew(
     task_callback: Callable[[Any], None] | None = None,
     hierarchical: bool = False,
     evidence: list[str] | None = None,
+    budget: guardrails.RunBudget | None = None,
 ) -> Crew:
     """step_callback(agent_role, step) fires on every agent step, so the UI always
     knows which agent produced it (also in hierarchical mode)."""
@@ -50,9 +52,16 @@ def build_crew(
             return None
         return lambda step: step_callback(role, step)
 
-    search = make_search_tool()
-    scrape = ScrapeWebsiteTool()
+    # Guardrails: every tool shares one per-run budget (pages, searches, deadline) and
+    # returns its output wrapped as untrusted data.
+    budget = budget or guardrails.RunBudget()
+    search = guard(make_search_tool(), budget)
+    scrape = ScrapeWebsiteTool(budget=budget)
+    review_tools = [guard(t, budget) for t in make_review_tools()]
     file_writer = FileWriterTool()
+    limits: dict[str, Any] = dict(max_iter=guardrails.AGENT_MAX_ITER,
+                                  max_execution_time=guardrails.RUN_TIMEOUT_SECONDS or None)
+    rule = guardrails.UNTRUSTED_DATA_RULE
 
     # ---------------------------------------------------------------- agents
     researcher = Agent(
@@ -65,13 +74,13 @@ def build_crew(
             "You spent eight years as a field researcher for a retail consultancy in India. "
             "You never trust a number you cannot link to, you check delivery apps, Google "
             "Maps listings, Instagram pages and company websites, and you write down the "
-            "exact URL where you saw every price."
+            "exact URL where you saw every price." + rule
         ),
         tools=[search, scrape],
         llm=llm,
         step_callback=cb("Market Researcher"),
-        max_iter=15,
         verbose=True,
+        **limits,
     )
 
     review_analyst = Agent(
@@ -84,13 +93,13 @@ def build_crew(
             "You ran customer-experience research for a food-delivery startup. You read "
             "hundreds of Google, Zomato, Swiggy, Justdial and Reddit reviews a week and can "
             "spot the complaint that keeps coming back. You separate one angry review from "
-            "a real pattern and say which is which."
+            "a real pattern and say which is which." + rule
         ),
-        tools=[search, scrape, *make_review_tools()],
+        tools=[search, scrape, *review_tools],
         llm=llm,
         step_callback=cb("Review Analyst"),
-        max_iter=15,
         verbose=True,
+        **limits,
     )
 
     strategist = Agent(
@@ -104,12 +113,13 @@ def build_crew(
             "You are a former strategy consultant who now advises first-time founders. "
             "You only reason from evidence your team handed you, you never invent "
             "competitors or numbers, and you are blunt about where the opportunity is "
-            "and where it is not."
+            "and where it is not." + rule
         ),
         tools=[],
         llm=llm,
         step_callback=cb("Strategy Analyst"),
         verbose=True,
+        **limits,
     )
 
     writer = Agent(
@@ -122,11 +132,13 @@ def build_crew(
             "You write investor and founder briefs. You use plain words, short sentences "
             "and tables, and you keep every citation the researchers gave you. A founder "
             "should be able to read your report in ten minutes and act on it the same day."
+            + rule
         ),
         tools=[file_writer],
         llm=llm,
         step_callback=cb("Report Writer"),
         verbose=True,
+        **limits,
     )
 
     # ----------------------------------------------------------------- tasks
@@ -252,7 +264,7 @@ def build_crew(
         ),
         agent=writer,
         context=[research_task, review_task, strategy_task],
-        guardrail=price_guardrail(can_search=False, evidence=evidence),
+        guardrail=price_guardrail(can_search=False, evidence=evidence, check_sources=True),
         # CrewAI saves the writer's raw final answer here. It is kept apart from
         # report.md because some models answer only "report saved" after using the
         # file tool; run() picks the real report and writes report.md.
@@ -336,11 +348,16 @@ def run(inputs: dict[str, str], step_callback: Callable[[str, Any], None] | None
 
     Raises run_limit.RunLimitReached before starting when today's runs (MAX_RUNS_PER_DAY,
     default 3) are used up. Every started run counts, finished or not.
+    Raises ValueError with a friendly message when the inputs fail the input guardrails.
     """
     import time
 
     import run_limit
 
+    inputs, problem = guardrails.validate_inputs(inputs)
+    if problem:
+        raise ValueError(problem)
+    kwargs.setdefault("budget", guardrails.RunBudget())
     run_index = run_limit.start_run(inputs.get("idea", ""), inputs.get("city", ""))
 
     inputs = {**inputs, "known_competitors": inputs.get("known_competitors") or "none given"}
@@ -369,7 +386,7 @@ def run(inputs: dict[str, str], step_callback: Callable[[str, Any], None] | None
     run_limit.finish_run(run_index, completed=True)
     from report_utils import clean_report, verify_prices
 
-    report = clean_report(_pick_report(final_answer, started_at))
+    report = guardrails.sanitize_output(clean_report(_pick_report(final_answer, started_at)))
     REPORT_PATH.write_text(report, encoding="utf-8")
     # Record which prices are backed by pages read this run; the app shows it.
     PRICE_CHECK_PATH.write_text(json.dumps(verify_prices(report, evidence), indent=2,
