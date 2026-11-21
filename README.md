@@ -150,3 +150,7 @@ Update later with:
 ```bash
 cd /opt/launchscout && git pull && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
+
+## License
+
+[MIT](LICENSE) © Prasanth Sundararajan
